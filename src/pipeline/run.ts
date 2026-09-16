@@ -1,0 +1,223 @@
+import { parseArgs } from "node:util";
+import { readRequiredEnv } from "../shared/env";
+import { createClient, parseOperatorKey, publishJson } from "../shared/hedera";
+import { DEFAULT_LIMITS } from "../shared/limits";
+import type { AnalysisMessage } from "../shared/schemas";
+import { loadTopicIds } from "../shared/topics";
+import {
+  DEFAULT_GATE_CONFIG,
+  HaikuClassifier,
+  shouldClassify,
+  type Classifier,
+  type DetectorEvent,
+} from "./classifier";
+import { StatisticalLayer } from "./statistical";
+import { subscribeTelemetry, type ConsensusFrame } from "./subscriber";
+import { TemporalLayer } from "./temporal";
+
+/*
+ * The worker: subscribes to telemetry on chain, runs layers 1–3, and publishes what it
+ * finds back to the analysis topic.
+ *
+ *   npm run pipeline                      # live, from now
+ *   npm run pipeline -- --from 600        # replay the last 10 minutes first
+ *   npm run pipeline -- --dry-run         # analyse but publish nothing
+ *   npm run pipeline -- --no-slm          # layers 1 and 2 only, no API calls
+ *
+ * It is long-running and holds a gRPC stream, so it belongs on a container host, not on
+ * Vercel. It talks to the dashboard only through HCS topics.
+ */
+
+/**
+ * Serialises analysis writes. Submitting concurrently lets two events reach consensus in
+ * the opposite order to their detection — a CRITICAL landing before the WARN that
+ * preceded it reads as a de-escalation that never happened. At a few events per minute
+ * the added latency is irrelevant; the topic being a faithful log is not.
+ */
+class PublishQueue {
+  private tail: Promise<void> = Promise.resolve();
+  private pending = 0;
+  failures = 0;
+
+  enqueue(publish: () => Promise<unknown>): void {
+    this.pending += 1;
+    this.tail = this.tail
+      .then(() => publish())
+      .then(
+        () => undefined,
+        (error: unknown) => {
+          this.failures += 1;
+          console.error(`publish failed: ${error instanceof Error ? error.message : String(error)}`);
+        },
+      )
+      .finally(() => {
+        this.pending -= 1;
+      });
+  }
+
+  get depth(): number {
+    return this.pending;
+  }
+
+  /** Resolves once everything queued so far has been submitted. */
+  drain(): Promise<void> {
+    return this.tail;
+  }
+}
+
+/** Per-boiler analysis state. Layers are stateful, so each boiler needs its own. */
+interface BoilerContext {
+  statistical: StatisticalLayer;
+  temporal: TemporalLayer;
+  lastClassifiedTs?: number;
+  frames: number;
+}
+
+interface Options {
+  fromSec: number;
+  dryRun: boolean;
+  useSlm: boolean;
+}
+
+function parseOptions(): Options {
+  const { values } = parseArgs({
+    options: {
+      from: { type: "string", default: "0" },
+      "dry-run": { type: "boolean", default: false },
+      "no-slm": { type: "boolean", default: false },
+    },
+  });
+  const fromSec = Number(values.from);
+  if (!Number.isFinite(fromSec) || fromSec < 0) {
+    console.error(`--from expects a non-negative number of seconds, got '${values.from}'.`);
+    process.exit(1);
+  }
+  return { fromSec, dryRun: values["dry-run"], useSlm: !values["no-slm"] };
+}
+
+async function runPipeline() {
+  const options = parseOptions();
+  const required = options.useSlm
+    ? (["ACCOUNT_ID", "PRIVATE_KEY", "ANTHROPIC_API_KEY"] as const)
+    : (["ACCOUNT_ID", "PRIVATE_KEY"] as const);
+  const env = readRequiredEnv(required);
+
+  const agentKey = parseOperatorKey(env.PRIVATE_KEY);
+  const client = createClient(env.ACCOUNT_ID, agentKey);
+  const topics = loadTopicIds();
+  const classifier: Classifier | undefined = options.useSlm
+    ? new HaikuClassifier(env.ANTHROPIC_API_KEY)
+    : undefined;
+
+  const boilers = new Map<string, BoilerContext>();
+  const stats = { frames: 0, events: 0, classifications: 0, gaps: 0 };
+  const queue = new PublishQueue();
+
+  const publish = (message: AnalysisMessage) => {
+    if (options.dryRun) return;
+    // Queued rather than awaited: the subscription callback must keep up with 1 Hz
+    // telemetry, but the writes themselves go out strictly in detection order.
+    queue.enqueue(() => publishJson(client, topics.analysis, message, agentKey));
+  };
+
+  const onFrame = ({ frame, sequenceNumber }: ConsensusFrame) => {
+    const context = contextFor(boilers, frame.b);
+    context.frames += 1;
+    stats.frames += 1;
+
+    const { stats: windowStats, events: outliers } = context.statistical.push(frame);
+    const { events: patterns, features } = context.temporal.push(frame, windowStats);
+    const events: DetectorEvent[] = [...outliers, ...patterns];
+
+    for (const event of events) {
+      stats.events += 1;
+      console.log(
+        `[${frame.b} hcs#${sequenceNumber}] ${event.severity} ${describe(event)}`,
+      );
+      publish(event);
+    }
+
+    if (!classifier) return;
+    if (!shouldClassify(events, context.lastClassifiedTs, frame.ts, DEFAULT_GATE_CONFIG)) return;
+    context.lastClassifiedTs = frame.ts;
+
+    // Deliberately not awaited: the subscription callback must keep up with 1 Hz
+    // telemetry, and a classification is about one window, not the live frame.
+    void classifier
+      .classify({ features, events })
+      .then((classification) => {
+        stats.classifications += 1;
+        console.log(
+          `[${frame.b}] SLM ${classification.state} urgency=${classification.urgency} ` +
+            `confidence=${classification.confidence} — ${classification.recommendedAction}`,
+        );
+        for (const line of classification.evidence) console.log(`    · ${line}`);
+        publish(classification);
+      })
+      .catch((error: unknown) => {
+        console.error(`classify failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+  };
+
+  const subscription = subscribeTelemetry({
+    client,
+    topicId: topics.telemetry,
+    startTime: options.fromSec > 0 ? new Date(Date.now() - options.fromSec * 1000) : undefined,
+    onFrame,
+    onGap: (boilerId, expected, received) => {
+      stats.gaps += 1;
+      console.error(`[${boilerId}] sequence gap: expected ${expected}, got ${received}`);
+    },
+    onError: (error) => console.error(`subscription: ${error.message}`),
+  });
+
+  console.log(
+    `watching telemetry topic ${topics.telemetry}` +
+      `${options.fromSec > 0 ? ` from ${options.fromSec}s ago` : ""}` +
+      `, limits p<${DEFAULT_LIMITS.mawpBar} bar` +
+      `${classifier ? "" : ", SLM disabled"}${options.dryRun ? ", dry run" : ""}`,
+  );
+
+  await new Promise<void>((resolve) => {
+    const shutdown = () => {
+      subscription.unsubscribe();
+      if (queue.depth > 0) console.error(`\ndraining ${queue.depth} queued write(s)…`);
+      void queue.drain().then(() => {
+        console.error(
+          `frames=${stats.frames} events=${stats.events} classifications=${stats.classifications} ` +
+            `gaps=${stats.gaps} publishFailures=${queue.failures}`,
+        );
+        client.close();
+        resolve();
+      });
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+  });
+}
+
+function contextFor(boilers: Map<string, BoilerContext>, boilerId: string): BoilerContext {
+  let context = boilers.get(boilerId);
+  if (!context) {
+    context = {
+      statistical: new StatisticalLayer(boilerId),
+      temporal: new TemporalLayer(boilerId),
+      frames: 0,
+    };
+    boilers.set(boilerId, context);
+    console.log(`tracking boiler ${boilerId}`);
+  }
+  return context;
+}
+
+function describe(event: DetectorEvent): string {
+  return event.kind === "outlier"
+    ? `${event.method} on ${event.sensors.join("+")} (score ${event.score})`
+    : `${event.pattern}: ${event.detail}`;
+}
+
+runPipeline().catch((error: unknown) => {
+  console.error("Pipeline failed:");
+  console.error(error instanceof Error ? (error.stack ?? error.message) : error);
+  process.exit(1);
+});

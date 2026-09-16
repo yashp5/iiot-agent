@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "resolveJsonModule": true,
+
+    "paths": {
+      "@hashgraph/hedera-agent-kit/plugins": [
+        "./node_modules/@hashgraph/hedera-agent-kit/dist/cjs/plugins"
+      ],
+      "@langchain/langgraph/prebuilt": [
+        "./node_modules/@langchain/langgraph/dist/prebuilt/index"
+      ]
+    }
+  },
+  "include": ["main.ts",  "src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

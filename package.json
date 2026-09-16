@@ -1,0 +1,39 @@
+{
+  "name": "iiot-agent",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/main.js",
+    "dev": "tsx main.ts",
+    "sim": "tsx src/simulator/run.ts",
+    "setup:topics": "tsx src/scripts/setup-topics.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "pipeline": "tsx src/pipeline/run.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.126.0",
+    "@hashgraph/hedera-agent-kit": "^4.1.0",
+    "@hashgraph/hedera-agent-kit-langchain": "^2.0.0",
+    "@hiero-ledger/sdk": "^2.88.0",
+    "@langchain/anthropic": "^1.5.10",
+    "@langchain/core": "^1.2.11",
+    "@langchain/langgraph": "^1.4.15",
+    "@langchain/openai": "^1.5.13",
+    "dotenv": "^17.4.2",
+    "simple-statistics": "^7.12.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.3",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.1"
+  }
+}
