@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { AnalysisMessage, ReportRef, TelemetryFrame } from "@shared/schemas";
+import type { AnalysisMessage, Decision, ReportRef, TelemetryFrame } from "@shared/schemas";
 import { tSat } from "@shared/steam";
 import { CombinationPlot, SensorChart, type SensorSeriesPoint } from "./components/charts";
+import { DecisionBar } from "./components/decide";
 import { SeverityBadge, UrgencyBadge } from "./components/severity";
 
 /*
@@ -70,6 +71,14 @@ export default function Dashboard() {
   const telemetry = useTopic<TelemetryFrame>("telemetry");
   const analysis = useTopic<AnalysisMessage>("analysis");
   const reports = useTopic<ReportRef>("reports");
+  const decisions = useTopic<Decision>("decisions");
+
+  // A report is settled once an operator has published a decision against it.
+  const decisionByReport = useMemo(() => {
+    const map = new Map<string, Decision>();
+    for (const record of decisions.records) map.set(record.payload.reportId, record.payload);
+    return map;
+  }, [decisions.records]);
 
   const frames = useMemo(() => {
     const byBoiler = new Map<string, TelemetryFrame[]>();
@@ -212,7 +221,8 @@ export default function Dashboard() {
         <h2>Incident reports</h2>
         <p className="note">
           Written when a classification reaches urgency {3} or above. Body and hash are carried on
-          chain; nothing here is generated in the browser.
+          chain; nothing here is generated in the browser. A decision is signed with an operator
+          key the analysis worker does not hold, and the worker reads it back off the chain.
         </p>
         {reports.records.length === 0 ? (
           <p className="empty">No reports on the topic yet.</p>
@@ -233,6 +243,7 @@ export default function Dashboard() {
                   <summary>Full report</summary>
                   <pre>{r.body}</pre>
                 </details>
+                <DecisionBar reportId={r.id} boiler={r.b} decided={decisionByReport.get(r.id)} />
               </div>
             );
           })

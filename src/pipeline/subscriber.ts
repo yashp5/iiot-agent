@@ -1,5 +1,5 @@
 import { TopicId, TopicMessageQuery, Timestamp, type Client, type SubscriptionHandle } from "@hiero-ledger/sdk";
-import { TelemetryFrameSchema, type TelemetryFrame } from "../shared/schemas";
+import { DecisionSchema, TelemetryFrameSchema, type Decision, type TelemetryFrame } from "../shared/schemas";
 
 /*
  * Mirror-node subscription. This is the gRPC streaming path, not REST polling: the
@@ -75,4 +75,44 @@ export function subscribeTelemetry(options: SubscribeOptions): SubscriptionHandl
       });
     },
   );
+}
+
+export interface DecisionSubscription {
+  client: Client;
+  topicId: string;
+  startTime?: Date;
+  onDecision: (decision: Decision, sequenceNumber: number) => void;
+  onError?: (error: Error) => void;
+}
+
+/**
+ * The return path: operators publish decisions, the worker reads them. The two never
+ * talk directly — an acknowledgement reaches the pipeline the same way a reading does,
+ * through consensus, and is just as auditable.
+ */
+export function subscribeDecisions(options: DecisionSubscription): SubscriptionHandle {
+  return new TopicMessageQuery()
+    .setTopicId(TopicId.fromString(options.topicId))
+    .setStartTime(Timestamp.fromDate(options.startTime ?? new Date()))
+    .subscribe(
+      options.client,
+      (_message, error) => options.onError?.(error),
+      (message) => {
+        const raw = Buffer.from(message.contents).toString("utf8");
+        try {
+          const result = DecisionSchema.safeParse(JSON.parse(raw));
+          if (!result.success) {
+            options.onError?.(
+              new Error(`decision schema mismatch at seq ${message.sequenceNumber.toString()}`),
+            );
+            return;
+          }
+          options.onDecision(result.data, message.sequenceNumber.toNumber());
+        } catch {
+          options.onError?.(
+            new Error(`non-JSON decision at seq ${message.sequenceNumber.toString()}`),
+          );
+        }
+      },
+    );
 }

@@ -20,6 +20,12 @@ RATE     ?= 1000
 # --- pipeline ----------------------------------------------------------------
 FROM     ?= 0
 
+# --- decisions ---------------------------------------------------------------
+REPORT   ?=
+ACTION   ?= ACKNOWLEDGE
+NOTE     ?= checked on the plant
+DASHBOARD ?= http://localhost:3100
+
 # --- e2e ---------------------------------------------------------------------
 # Seconds to let the worker's subscription settle before the simulator starts, and
 # to let the last classifications and reports land before it is stopped.
@@ -29,7 +35,7 @@ PIPELINE_LOG ?= /tmp/boiler-pipeline.log
 
 MIRROR ?= https://testnet.mirrornode.hedera.com/api/v1
 
-.PHONY: help install topics sim sim-dry pipeline pipeline-cheap dashboard e2e verify typecheck test build clean
+.PHONY: help install topics sim sim-dry pipeline pipeline-cheap dashboard decide e2e verify typecheck test build clean
 
 help: ## Show this help
 	@echo "Boiler Guardian"
@@ -62,6 +68,12 @@ pipeline-cheap: ## Run the worker with no model calls (layers 1-2 only)
 
 dashboard: ## Serve the dashboard on http://localhost:3100
 	npm run web
+
+decide: ## Publish an operator decision (REPORT=<id> ACTION=ACKNOWLEDGE|ESCALATE|REQUEST_SHUTDOWN|FALSE_POSITIVE)
+	@test -n "$(REPORT)" || { echo "REPORT=<report id> is required — see 'make verify' or the dashboard"; exit 1; }
+	@curl -s -X POST $(DASHBOARD)/api/decision -H 'content-type: application/json' \
+		-d '{"reportId":"$(REPORT)","b":"$(BOILER)","action":"$(ACTION)","note":"$(NOTE)"}' \
+		| jq -r 'if .error then "failed: \(.error)" else "published as decisions message \(.sequenceNumber)" end'
 
 e2e: ## Full run: start the worker, drive one fault through it, verify on chain
 	@echo "→ starting worker (log: $(PIPELINE_LOG))"

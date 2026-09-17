@@ -317,6 +317,55 @@ For the `low_water` run this returns temperature climbing (196.5 → 207.7 °C) 
 pressure holds flat (9.94 → 10.01 bar) — the raw evidence behind the verdict, readable by
 anyone with the topic id and no access to either process.
 
+## Closing the loop: the operator decision
+
+The run above ends with a report on chain. The human step is what closes it.
+
+Start the dashboard alongside the worker (`make dashboard`), open a report, optionally add
+a note, and pick an action. The dashboard signs with `OPERATOR_PRIVATE_KEY` and publishes to
+the decisions topic. Or drive it headlessly:
+
+```bash
+make decide REPORT=<report id> ACTION=ACKNOWLEDGE NOTE="level checked on the glass"
+```
+
+The worker subscribes to the decisions topic and reacts within a second or two:
+
+```
+[boiler-01 decision#1] ACKNOWLEDGE by operator — Level checked on the glass, feedwater pump restarted
+    reports quiet for 15 min unless urgency exceeds 3
+```
+
+| Action | Effect on the worker |
+|---|---|
+| `ACKNOWLEDGE` | reports quiet 15 min — someone owns the problem |
+| `FALSE_POSITIVE` | reports quiet 30 min, logged for threshold tuning |
+| `ESCALATE` | recorded, suppresses nothing |
+| `REQUEST_SHUTDOWN` | recorded loudly; this system is advisory and actuates nothing |
+
+Two things that silence never does: it never stops the **detectors** — outliers, patterns
+and classifications keep reaching the analysis topic throughout — and it never outlasts a
+worsening boiler, because a classification above the acknowledged urgency breaks through
+immediately.
+
+**The check that makes this worth anything.** The worker holds the agent key, not the
+operator key, so it cannot approve its own findings:
+
+```bash
+# submit a decision signed with the agent key instead of the operator key
+# => REJECTED: receipt ... contained error status INVALID_SIGNATURE
+```
+
+Verify the decisions on chain like any other topic:
+
+```bash
+curl -s "$MIRROR/topics/$TOPIC_DECISIONS/messages?limit=10&order=desc" \
+  | jq -r '.messages[] | "\(.sequence_number) \(.message|@base64d)"'
+```
+
+Each decision carries the `reportId` it answers, so the chain holds the whole path: raw
+readings → detector events → classification → report → the human verdict on it.
+
 ## Other scenarios
 
 Same command, different `--fault`:

@@ -126,10 +126,17 @@ export const ReportRefSchema = z.object({
 });
 export type ReportRef = z.infer<typeof ReportRefSchema>;
 
+/**
+ * An operator's verdict on a report. Signed with an operator key, which the agent does
+ * not hold: the decisions topic rejects anything the pipeline tries to submit, so a
+ * decision on chain is evidence a human acted, not merely that software claims one did.
+ */
 export const DecisionSchema = z.object({
   v: z.literal(1),
   kind: z.literal("decision"),
   reportId: z.string(),
+  /** Carried so the worker can act without first resolving the report. */
+  b: z.string(),
   action: z.enum([
     "ACKNOWLEDGE",
     "ESCALATE",
@@ -138,8 +145,17 @@ export const DecisionSchema = z.object({
   ]),
   operator: z.string(),
   note: z.string().max(400).optional(),
+  ts: z.number().int().positive(),
 });
 export type Decision = z.infer<typeof DecisionSchema>;
+
+export const DECISION_ACTIONS = [
+  "ACKNOWLEDGE",
+  "ESCALATE",
+  "REQUEST_SHUTDOWN",
+  "FALSE_POSITIVE",
+] as const;
+export type DecisionAction = (typeof DECISION_ACTIONS)[number];
 
 /**
  * Compact numeric summary of one window, assembled by the temporal layer from both

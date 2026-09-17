@@ -124,3 +124,24 @@ table.data { width: 100%; border-collapse: collapse; font-size: 12px; font-varia
 table.data th, table.data td { text-align: right; padding: 4px 8px; border-top: 1px solid var(--border); color: var(--text-secondary); }
 table.data th:first-child, table.data td:first-child { text-align: left; }
 table.data th { color: var(--text-muted); font-weight: 500; }
+
+.decide { margin-top: 10px; }
+.decide input {
+  width: 100%; padding: 7px 10px; font: inherit; font-size: 13px;
+  color: var(--text-primary); background: var(--page);
+  border: 1px solid var(--border); border-radius: 7px;
+}
+.decide input::placeholder { color: var(--text-muted); }
+.decide .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.decide button {
+  font: inherit; font-size: 12px; font-weight: 500;
+  padding: 6px 12px; border-radius: 7px; cursor: pointer;
+  color: var(--text-primary); background: var(--surface-1);
+  border: 1px solid var(--border);
+}
+.decide button:hover:not(:disabled) { background: var(--page); }
+.decide button:disabled { opacity: 0.55; cursor: default; }
+.decide button.danger { color: var(--status-critical); border-color: var(--status-critical); }
+.decide-result { font-size: 12px; color: var(--text-secondary); margin: 8px 0 0; }
+.decided { font-size: 13px; color: var(--text-secondary); margin: 10px 0 0; }
+.decided strong { color: var(--text-primary); }

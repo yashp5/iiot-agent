@@ -2,7 +2,7 @@ import { parseArgs } from "node:util";
 import { readRequiredEnv } from "../shared/env";
 import { createClient, parseOperatorKey, publishJson } from "../shared/hedera";
 import { DEFAULT_LIMITS } from "../shared/limits";
-import type { AnalysisMessage, ReportRef } from "../shared/schemas";
+import type { AnalysisMessage, Decision, ReportRef } from "../shared/schemas";
 import { loadTopicIds } from "../shared/topics";
 import {
   DEFAULT_GATE_CONFIG,
@@ -13,7 +13,7 @@ import {
 } from "./classifier";
 import { REPORT_URGENCY_THRESHOLD, SonnetReporter, type Reporter } from "./reporter";
 import { StatisticalLayer } from "./statistical";
-import { subscribeTelemetry, type ConsensusFrame } from "./subscriber";
+import { subscribeDecisions, subscribeTelemetry, type ConsensusFrame } from "./subscriber";
 import { TemporalLayer } from "./temporal";
 
 /*
@@ -73,11 +73,26 @@ interface BoilerContext {
   lastClassifiedTs?: number;
   /** Reports are expensive and land in front of a human; re-issue only on escalation. */
   lastReport?: { ts: number; urgency: number };
+  /** Set by an operator decision: stop reporting until this time unless urgency rises. */
+  suppression?: { until: number; aboveUrgency: number; reason: Decision["action"] };
   frames: number;
 }
 
 /** Minimum gap between reports for one boiler, unless urgency rises. */
 const REPORT_COOLDOWN_SEC = 300;
+
+/**
+ * How long an operator decision quiets reporting for. An acknowledgement means someone
+ * owns the problem and does not need to be told again; a false positive means the
+ * detectors were wrong, which is worth a longer silence and a note for threshold tuning.
+ * Neither silences the detectors themselves — events keep reaching the analysis topic.
+ */
+const SUPPRESS_SEC: Record<Decision["action"], number> = {
+  ACKNOWLEDGE: 900,
+  FALSE_POSITIVE: 1800,
+  ESCALATE: 0,
+  REQUEST_SHUTDOWN: 0,
+};
 
 interface Options {
   fromSec: number;
@@ -126,7 +141,7 @@ async function runPipeline() {
     : undefined;
 
   const boilers = new Map<string, BoilerContext>();
-  const stats = { frames: 0, events: 0, classifications: 0, reports: 0, gaps: 0 };
+  const stats = { frames: 0, events: 0, classifications: 0, reports: 0, decisions: 0, gaps: 0 };
   const queue = new PublishQueue();
 
   const publish = (message: AnalysisMessage | ReportRef, topicId = topics.analysis) => {
@@ -191,6 +206,44 @@ async function runPipeline() {
       });
   };
 
+  const onDecision = (decision: Decision, sequenceNumber: number) => {
+    stats.decisions += 1;
+    const context = contextFor(boilers, decision.b);
+    const seconds = SUPPRESS_SEC[decision.action];
+
+    console.log(
+      `[${decision.b} decision#${sequenceNumber}] ${decision.action} by ${decision.operator}` +
+        `${decision.note ? ` — ${decision.note}` : ""}`,
+    );
+
+    if (seconds > 0) {
+      context.suppression = {
+        until: Date.now() + seconds * 1000,
+        // An escalating condition must still break through: silence is for the state the
+        // operator saw, not for whatever the boiler does next.
+        aboveUrgency: context.lastReport?.urgency ?? REPORT_URGENCY_THRESHOLD,
+        reason: decision.action,
+      };
+      console.log(
+        `    reports quiet for ${seconds / 60} min unless urgency exceeds ${context.suppression.aboveUrgency}`,
+      );
+    }
+    if (decision.action === "FALSE_POSITIVE") {
+      console.log("    logged for threshold tuning — detectors unchanged");
+    }
+    if (decision.action === "REQUEST_SHUTDOWN") {
+      console.log("    shutdown requested by operator — this system is advisory and actuates nothing");
+    }
+  };
+
+  const decisionSubscription = subscribeDecisions({
+    client,
+    topicId: topics.decisions,
+    startTime: options.fromSec > 0 ? new Date(Date.now() - options.fromSec * 1000) : undefined,
+    onDecision,
+    onError: (error) => console.error(`decisions: ${error.message}`),
+  });
+
   const subscription = subscribeTelemetry({
     client,
     topicId: topics.telemetry,
@@ -204,7 +257,7 @@ async function runPipeline() {
   });
 
   console.log(
-    `watching telemetry topic ${topics.telemetry}` +
+    `watching telemetry ${topics.telemetry} and decisions ${topics.decisions}` +
       `${options.fromSec > 0 ? ` from ${options.fromSec}s ago` : ""}` +
       `, limits p<${DEFAULT_LIMITS.mawpBar} bar` +
       `${classifier ? "" : ", SLM disabled"}${reporter ? "" : ", reports disabled"}` +
@@ -214,11 +267,13 @@ async function runPipeline() {
   await new Promise<void>((resolve) => {
     const shutdown = () => {
       subscription.unsubscribe();
+      decisionSubscription.unsubscribe();
       if (queue.depth > 0) console.error(`\ndraining ${queue.depth} queued write(s)…`);
       void queue.drain().then(() => {
         console.error(
           `frames=${stats.frames} events=${stats.events} classifications=${stats.classifications} ` +
-            `reports=${stats.reports} gaps=${stats.gaps} publishFailures=${queue.failures}`,
+            `reports=${stats.reports} decisions=${stats.decisions} gaps=${stats.gaps} ` +
+            `publishFailures=${queue.failures}`,
         );
         client.close();
         resolve();
@@ -232,6 +287,10 @@ async function runPipeline() {
 /** Report on a fresh incident, on any escalation, or once the cooldown lapses. */
 function shouldReport(context: BoilerContext, urgency: number, now: number): boolean {
   if (urgency < REPORT_URGENCY_THRESHOLD) return false;
+
+  const quiet = context.suppression;
+  if (quiet && Date.now() < quiet.until && urgency <= quiet.aboveUrgency) return false;
+
   const last = context.lastReport;
   if (!last) return true;
   if (urgency > last.urgency) return true;

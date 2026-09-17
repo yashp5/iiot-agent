@@ -29,8 +29,12 @@ simulator ──1 Hz frames, device key──► HCS telemetry topic
 3. **SLM** (`src/pipeline/classifier.ts`) — Claude Haiku 4.5 classifies the boiler's
    condition from the feature vector alone, never raw telemetry. A guardrail lets it raise
    severity but never lower a deterministic CRITICAL.
-4. **Human in the loop** — operators sign decisions with their own wallet onto the
-   decisions topic. *(Not yet implemented.)*
+4. **Human in the loop** — an operator decides on each report from the dashboard, and the
+   decision is published to the decisions topic signed with an operator key. The worker
+   subscribes to that topic and acts on it: an acknowledgement quiets reporting for 15
+   minutes, a false positive for 30, and neither silences the detectors — events keep
+   reaching the analysis topic, and a rise in urgency breaks through the silence anyway.
+   Escalations and shutdown requests are recorded and never suppress anything.
 
 When a classification reaches urgency 3 or above, a Sonnet-written incident report
 (`src/pipeline/reporter.ts`) goes to the reports topic — body and SHA-256 together, carried
@@ -46,6 +50,16 @@ npm run setup:topics     # creates the four topics, prints the rest of the .env 
 
 Each topic enforces its own submit key: telemetry accepts only the device key, analysis
 only the agent key, decisions only operator keys. The operator account pays all fees.
+
+This separation is the point of the decisions topic: the analysis worker does not hold the
+operator key, so a decision on chain is evidence a human acted rather than software
+claiming one did. Verified — the agent key is rejected with `INVALID_SIGNATURE`.
+
+**Prototype limitation:** the operator key currently lives in `.env` and the dashboard
+signs server-side, so a decision proves "someone with operator authority on this
+deployment", not "this named person". Real non-repudiation means the operator signing in
+their own wallet (`hedera-wallet-connect` / HashPack), which replaces only the signing step
+in `web/app/api/decision/route.ts` — the message, the topic, and the worker are unchanged.
 
 ## Running
 
@@ -66,6 +80,7 @@ Start the pipeline first — it subscribes from "now" unless given `FROM=<second
 | `make pipeline-cheap` | worker with layers 1–2 only, no model calls |
 | `make dashboard` | the dashboard at http://localhost:3100 |
 | `make e2e` | worker + one fault + on-chain verification, end to end |
+| `make decide` | publish a decision (`REPORT=<id> ACTION=ACKNOWLEDGE`) |
 | `make verify` | read the topics back from the mirror node |
 | `make topics` | create the HCS topics |
 | `make typecheck` / `make test` | tsc + dashboard build / vitest |

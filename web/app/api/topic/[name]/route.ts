@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAnalysis, getReports, getTelemetry, type TopicName } from "@/lib/mirror";
+import { getAnalysis, getDecisions, getReports, getTelemetry, type TopicName } from "@/lib/mirror";
 
 /*
  * Proxies the mirror node so topic ids stay server-side and chunk reassembly happens once,
@@ -10,6 +10,7 @@ const READERS: Record<string, (since?: string) => Promise<unknown>> = {
   telemetry: getTelemetry,
   analysis: getAnalysis,
   reports: () => getReports(),
+  decisions: () => getDecisions(),
 };
 
 export const dynamic = "force-dynamic";

@@ -1,8 +1,10 @@
 import {
   AnalysisMessageSchema,
+  DecisionSchema,
   ReportRefSchema,
   TelemetryFrameSchema,
   type AnalysisMessage,
+  type Decision,
   type ReportRef,
   type TelemetryFrame,
 } from "@shared/schemas";
@@ -139,4 +141,9 @@ export async function getAnalysis(since?: string): Promise<Array<TopicRecord<Ana
 export async function getReports(): Promise<Array<TopicRecord<ReportRef>>> {
   const records = await fetchTopic("reports", { limit: 100 });
   return parseAll(records, (v) => ReportRefSchema.safeParse(v));
+}
+
+export async function getDecisions(): Promise<Array<TopicRecord<Decision>>> {
+  const records = await fetchTopic("decisions", { limit: 100 });
+  return parseAll(records, (v) => DecisionSchema.safeParse(v));
 }
