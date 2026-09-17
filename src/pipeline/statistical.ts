@@ -18,6 +18,11 @@ import { SlidingWindow, mean, stdDev } from "./window";
  * telemetry and unit tested against the simulator's labelled faults.
  */
 
+// each progressive layer, less data less computation power
+// l1 ignore normal, outliers go the next layer
+// l2
+// can increase the amount of layers
+
 export interface StatConfig {
   /** Samples retained; at 1 Hz this is the window in seconds. */
   windowSamples: number;

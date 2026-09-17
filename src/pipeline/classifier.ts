@@ -57,6 +57,14 @@ Urgency: 1 routine, 2 watch, 3 investigate now, 4 intervene, 5 emergency.
 Report only what the numbers support. Cite specific values in evidence. If the data is
 ambiguous, say so in evidence and lower your confidence rather than inventing a cause.`;
 
+// flaws, diff models, another model generates flaws/negation then an aggregator acts as the judge
+// traversal pattern, graph structure
+// deterministic
+// o,t,p graph determine which combinations affect the most
+// pattern agents - classifier agent
+// negation layers hallucinate or based on facts
+// judge layer decides what answer is best
+
 const OUTPUT_SCHEMA = {
   type: "object",
   properties: {
