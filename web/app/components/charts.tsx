@@ -148,6 +148,13 @@ export function CombinationPlot({ frames }: { frames: TelemetryFrame[] }) {
     return { p, saturation: +tSat(p).toFixed(2) };
   });
 
+  // The y-domain must span the readings AND the saturation curve. Deriving it from the
+  // scatter alone drops the curve off-scale exactly when it matters most — a low-water
+  // boiler reads 30 °C above saturation — and recharts then places its points at NaN.
+  const temperatures = [...points.map((d) => d.t), ...curve.map((c) => c.saturation)];
+  const yLo = temperatures.length ? Math.min(...temperatures) - 3 : 175;
+  const yHi = temperatures.length ? Math.max(...temperatures) + 3 : 195;
+
   return (
     <div className="card">
       <h2>Temperature vs pressure</h2>
@@ -171,7 +178,7 @@ export function CombinationPlot({ frames }: { frames: TelemetryFrame[] }) {
           <YAxis
             type="number"
             dataKey="t"
-            domain={["dataMin - 3", "dataMax + 3"]}
+            domain={[yLo, yHi]}
             tick={AXIS}
             tickLine={false}
             axisLine={false}
@@ -207,8 +214,8 @@ export function CombinationPlot({ frames }: { frames: TelemetryFrame[] }) {
             isAnimationActive={false}
             legendType="none"
             label={({ index, x, y }: { index?: number; x?: number; y?: number }) =>
-              index === curve.length - 1 && typeof x === "number" && typeof y === "number" ? (
-                <text x={x - 6} y={y - 8} textAnchor="end" fontSize={10} fill="var(--text-muted)">
+              index === curve.length - 1 && Number.isFinite(x) && Number.isFinite(y) ? (
+                <text x={x! - 6} y={y! - 8} textAnchor="end" fontSize={10} fill="var(--text-muted)">
                   saturation
                 </text>
               ) : (
