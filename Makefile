@@ -26,6 +26,10 @@ ACTION   ?= ACKNOWLEDGE
 NOTE     ?= checked on the plant
 DASHBOARD ?= http://localhost:3100
 
+# --- deployment --------------------------------------------------------------
+HOST      ?= visa-ec2
+CONTAINER ?= iiot-worker
+
 # --- e2e ---------------------------------------------------------------------
 # Seconds to let the worker's subscription settle before the simulator starts, and
 # to let the last classifications and reports land before it is stopped.
@@ -35,7 +39,8 @@ PIPELINE_LOG ?= /tmp/boiler-pipeline.log
 
 MIRROR ?= https://testnet.mirrornode.hedera.com/api/v1
 
-.PHONY: help install topics sim sim-dry pipeline pipeline-cheap dashboard decide e2e verify typecheck test build clean
+.PHONY: help install topics sim sim-dry pipeline pipeline-cheap dashboard decide e2e verify \
+	deploy-worker worker-logs worker-status worker-stop typecheck test build clean
 
 help: ## Show this help
 	@echo "Boiler Guardian"
@@ -103,6 +108,18 @@ verify: ## Read back the topics from the mirror node
 	echo "reports $$TOPIC_REPORTS"; \
 	curl -s "$(MIRROR)/topics/$$TOPIC_REPORTS/messages?limit=100&order=desc" \
 		| jq -r '[.messages[] | .chunk_info.initial_transaction_id.transaction_valid_start // (.sequence_number|tostring)] | unique | length as $$n | "  \($$n) report(s) on topic — each spans several chunks; read them on the dashboard"'
+
+deploy-worker: ## Ship the worker to the Docker host (HOST=visa-ec2)
+	HOST=$(HOST) CONTAINER=$(CONTAINER) scripts/deploy-worker.sh
+
+worker-logs: ## Tail the deployed worker's logs
+	ssh $(HOST) "docker logs -f --tail 50 $(CONTAINER)"
+
+worker-status: ## Show the deployed worker's container status
+	@ssh $(HOST) "docker ps -a --filter name=$(CONTAINER) --format '{{.Names}}  {{.Status}}  {{.Image}}'"
+
+worker-stop: ## Stop the deployed worker
+	ssh $(HOST) "docker stop $(CONTAINER)"
 
 typecheck: ## Type-check the worker and build the dashboard
 	npx tsc --noEmit
