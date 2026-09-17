@@ -49,22 +49,30 @@ only the agent key, decisions only operator keys. The operator account pays all 
 
 ## Running
 
+`make help` lists every target. The common ones, in two terminals:
+
 ```bash
-npm run pipeline                                         # the worker: subscribe and analyse
-npm run sim -- --duration 120 --fault low_water --start 30   # a boiler, with a fault
+make pipeline                       # the worker: subscribe, analyse, report
+make sim FAULT=low_water            # a boiler, with a fault injected
 ```
 
-Start the pipeline first — it subscribes from "now" unless given `--from <seconds>`.
+Start the pipeline first — it subscribes from "now" unless given `FROM=<seconds>`.
 
-| Script | Purpose |
+| Target | Purpose |
 |---|---|
-| `npm run sim` | boiler simulator → telemetry topic (`--dry-run` for no chain) |
-| `npm run pipeline` | analysis worker (`--no-slm`, `--dry-run`, `--from`) |
-| `npm run setup:topics` | create the HCS topics |
-| `npm run web` | the dashboard at http://localhost:3100 |
-| `npm run build` / `npm test` | compile / vitest |
+| `make sim` | simulator → telemetry topic (`FAULT`, `START`, `DURATION`, `SEED`, `RATE`) |
+| `make sim-dry` | simulator with no chain writes, frames to stdout |
+| `make pipeline` | analysis worker (`FROM=600` to replay history first) |
+| `make pipeline-cheap` | worker with layers 1–2 only, no model calls |
+| `make dashboard` | the dashboard at http://localhost:3100 |
+| `make e2e` | worker + one fault + on-chain verification, end to end |
+| `make verify` | read the topics back from the mirror node |
+| `make topics` | create the HCS topics |
+| `make typecheck` / `make test` | tsc + dashboard build / vitest |
 
 Faults: `overpressure`, `o2_collapse`, `sensor_flatline`, `tube_rupture`, `low_water`.
+Every target is a wrapper over the npm scripts, which still work directly if you prefer
+them (`npm run sim -- --fault low_water --start 30`).
 
 ## Dashboard
 
