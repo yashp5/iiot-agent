@@ -50,6 +50,15 @@ directory rather than `web/`, because the dashboard imports `../src/shared` — 
 definition of a telemetry frame, shared with the pipeline — and a Vercel root of `web/`
 would put those files outside the build context.
 
+**Root Directory must be the repository root, not `web/`.** Vercel auto-detects the Next
+app during import and will offer to set the root to `web/` — reject that. From inside
+`web/`, `npm run build --workspace web` fails with `No workspaces found`, and more
+fundamentally `../src/shared` is outside the build context, so the shared schemas the
+dashboard imports do not exist. Settings → Build and Deployment → Root Directory → `./`.
+
+A root install is ~340 packages (both workspaces). If a build log shows ~72, it installed
+only the dashboard's own dependencies and the root directory is still wrong.
+
 Import the repository at vercel.com/new and set these environment variables:
 
 | Variable | Why the dashboard needs it |
