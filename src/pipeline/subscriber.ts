@@ -25,6 +25,12 @@ export interface SubscribeOptions {
   onFrame: (frame: ConsensusFrame) => void;
   /** A frame the device numbered out of order, or one that never arrived. */
   onGap?: (boilerId: string, expectedSeq: number, receivedSeq: number) => void;
+  /**
+   * The device's counter went backwards, which means a new gateway session rather than a
+   * lost frame. The readings either side of it belong to different runs of the plant, so
+   * any window spanning the boundary is meaningless and must be discarded.
+   */
+  onReset?: (boilerId: string, previousSeq: number, newSeq: number) => void;
   onError?: (error: Error) => void;
 }
 
@@ -61,10 +67,14 @@ export function subscribeTelemetry(options: SubscribeOptions): SubscriptionHandl
 
       const frame = result.data;
       const previous = lastSeqByBoiler.get(frame.b);
-      if (previous !== undefined && frame.seq !== previous + 1) {
-        // The device's own counter, not the HCS sequence: this is how a dropped or
-        // reordered submission becomes visible from the consuming side.
-        options.onGap?.(frame.b, previous + 1, frame.seq);
+      if (previous !== undefined) {
+        if (frame.seq <= previous) {
+          options.onReset?.(frame.b, previous, frame.seq);
+        } else if (frame.seq !== previous + 1) {
+          // The device's own counter, not the HCS sequence: this is how a dropped or
+          // reordered submission becomes visible from the consuming side.
+          options.onGap?.(frame.b, previous + 1, frame.seq);
+        }
       }
       lastSeqByBoiler.set(frame.b, frame.seq);
 

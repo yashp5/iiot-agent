@@ -68,6 +68,7 @@ class PublishQueue {
 
 /** Per-boiler analysis state. Layers are stateful, so each boiler needs its own. */
 interface BoilerContext {
+  // Replaced wholesale when the gateway restarts, so these are not readonly.
   statistical: StatisticalLayer;
   temporal: TemporalLayer;
   lastClassifiedTs?: number;
@@ -141,7 +142,7 @@ async function runPipeline() {
     : undefined;
 
   const boilers = new Map<string, BoilerContext>();
-  const stats = { frames: 0, events: 0, classifications: 0, reports: 0, decisions: 0, gaps: 0 };
+  const stats = { frames: 0, events: 0, classifications: 0, reports: 0, decisions: 0, gaps: 0, resets: 0 };
   const queue = new PublishQueue();
 
   const publish = (message: AnalysisMessage | ReportRef, topicId = topics.analysis) => {
@@ -253,6 +254,21 @@ async function runPipeline() {
       stats.gaps += 1;
       console.error(`[${boilerId}] sequence gap: expected ${expected}, got ${received}`);
     },
+    onReset: (boilerId, previous, received) => {
+      stats.resets += 1;
+      // Start clean. Carrying the old window across a restart produces statistics over
+      // two unrelated runs — which reads as a confident verdict about a boiler that no
+      // longer exists. Operator suppression survives: it is about the boiler, not the run.
+      const context = contextFor(boilers, boilerId);
+      context.statistical = new StatisticalLayer(boilerId);
+      context.temporal = new TemporalLayer(boilerId);
+      context.lastClassifiedTs = undefined;
+      context.lastReport = undefined;
+      context.frames = 0;
+      console.error(
+        `[${boilerId}] gateway restarted (seq ${previous} → ${received}) — analysis window reset`,
+      );
+    },
     onError: (error) => console.error(`subscription: ${error.message}`),
   });
 
@@ -273,6 +289,7 @@ async function runPipeline() {
         console.error(
           `frames=${stats.frames} events=${stats.events} classifications=${stats.classifications} ` +
             `reports=${stats.reports} decisions=${stats.decisions} gaps=${stats.gaps} ` +
+            `resets=${stats.resets} ` +
             `publishFailures=${queue.failures}`,
         );
         client.close();
