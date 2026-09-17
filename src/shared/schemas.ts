@@ -105,7 +105,12 @@ export const AnalysisMessageSchema = z.discriminatedUnion("kind", [
 ]);
 export type AnalysisMessage = z.infer<typeof AnalysisMessageSchema>;
 
-/** The full report lives off-chain; the hash on chain proves it was never edited. */
+/**
+ * An incident report. The body is carried on chain: the SDK chunks a message over 1024
+ * bytes into up to 20 chunks, so a ~2 KB report fits comfortably and needs no off-chain
+ * store. `sha256` lets a reader verify the body it reassembled, and `url` is reserved for
+ * reports too large for that — mirrored to blob storage with only the hash on chain.
+ */
 export const ReportRefSchema = z.object({
   v: z.literal(1),
   kind: z.literal("report"),
@@ -115,8 +120,9 @@ export const ReportRefSchema = z.object({
   state: BoilerStateSchema,
   urgency: z.number().int().min(1).max(5),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
-  url: z.string().url(),
   summary: z.string().max(400),
+  body: z.string().max(18000),
+  url: z.string().url().optional(),
 });
 export type ReportRef = z.infer<typeof ReportRefSchema>;
 

@@ -11,7 +11,8 @@
     "setup:topics": "tsx src/scripts/setup-topics.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "pipeline": "tsx src/pipeline/run.ts"
+    "pipeline": "tsx src/pipeline/run.ts",
+    "web": "npm run dev --workspace web"
   },
   "keywords": [],
   "author": "",
@@ -35,5 +36,8 @@
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vitest": "^5.0.1"
-  }
+  },
+  "workspaces": [
+    "web"
+  ]
 }

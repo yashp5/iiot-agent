@@ -2,7 +2,7 @@ import { parseArgs } from "node:util";
 import { readRequiredEnv } from "../shared/env";
 import { createClient, parseOperatorKey, publishJson } from "../shared/hedera";
 import { DEFAULT_LIMITS } from "../shared/limits";
-import type { AnalysisMessage } from "../shared/schemas";
+import type { AnalysisMessage, ReportRef } from "../shared/schemas";
 import { loadTopicIds } from "../shared/topics";
 import {
   DEFAULT_GATE_CONFIG,
@@ -11,6 +11,7 @@ import {
   type Classifier,
   type DetectorEvent,
 } from "./classifier";
+import { REPORT_URGENCY_THRESHOLD, SonnetReporter, type Reporter } from "./reporter";
 import { StatisticalLayer } from "./statistical";
 import { subscribeTelemetry, type ConsensusFrame } from "./subscriber";
 import { TemporalLayer } from "./temporal";
@@ -70,13 +71,19 @@ interface BoilerContext {
   statistical: StatisticalLayer;
   temporal: TemporalLayer;
   lastClassifiedTs?: number;
+  /** Reports are expensive and land in front of a human; re-issue only on escalation. */
+  lastReport?: { ts: number; urgency: number };
   frames: number;
 }
+
+/** Minimum gap between reports for one boiler, unless urgency rises. */
+const REPORT_COOLDOWN_SEC = 300;
 
 interface Options {
   fromSec: number;
   dryRun: boolean;
   useSlm: boolean;
+  useReports: boolean;
 }
 
 function parseOptions(): Options {
@@ -85,6 +92,7 @@ function parseOptions(): Options {
       from: { type: "string", default: "0" },
       "dry-run": { type: "boolean", default: false },
       "no-slm": { type: "boolean", default: false },
+      "no-reports": { type: "boolean", default: false },
     },
   });
   const fromSec = Number(values.from);
@@ -92,7 +100,12 @@ function parseOptions(): Options {
     console.error(`--from expects a non-negative number of seconds, got '${values.from}'.`);
     process.exit(1);
   }
-  return { fromSec, dryRun: values["dry-run"], useSlm: !values["no-slm"] };
+  return {
+    fromSec,
+    dryRun: values["dry-run"],
+    useSlm: !values["no-slm"],
+    useReports: !values["no-slm"] && !values["no-reports"],
+  };
 }
 
 async function runPipeline() {
@@ -108,16 +121,19 @@ async function runPipeline() {
   const classifier: Classifier | undefined = options.useSlm
     ? new HaikuClassifier(env.ANTHROPIC_API_KEY)
     : undefined;
+  const reporter: Reporter | undefined = options.useReports
+    ? new SonnetReporter(env.ANTHROPIC_API_KEY)
+    : undefined;
 
   const boilers = new Map<string, BoilerContext>();
-  const stats = { frames: 0, events: 0, classifications: 0, gaps: 0 };
+  const stats = { frames: 0, events: 0, classifications: 0, reports: 0, gaps: 0 };
   const queue = new PublishQueue();
 
-  const publish = (message: AnalysisMessage) => {
+  const publish = (message: AnalysisMessage | ReportRef, topicId = topics.analysis) => {
     if (options.dryRun) return;
     // Queued rather than awaited: the subscription callback must keep up with 1 Hz
     // telemetry, but the writes themselves go out strictly in detection order.
-    queue.enqueue(() => publishJson(client, topics.analysis, message, agentKey));
+    queue.enqueue(() => publishJson(client, topicId, message, agentKey));
   };
 
   const onFrame = ({ frame, sequenceNumber }: ConsensusFrame) => {
@@ -153,6 +169,22 @@ async function runPipeline() {
         );
         for (const line of classification.evidence) console.log(`    · ${line}`);
         publish(classification);
+
+        if (reporter && shouldReport(context, classification.urgency, frame.ts)) {
+          context.lastReport = { ts: frame.ts, urgency: classification.urgency };
+          void reporter
+            .report({ classification, features, events, frames: context.statistical.frames })
+            .then((report) => {
+              stats.reports += 1;
+              console.log(`[${frame.b}] REPORT ${report.id.slice(0, 8)} — ${report.summary}`);
+              publish(report, topics.reports);
+            })
+            .catch((error: unknown) => {
+              // A failed report must not stop analysis: the events and the classification
+              // are already on chain, which is what the audit trail depends on.
+              console.error(`report failed: ${error instanceof Error ? error.message : String(error)}`);
+            });
+        }
       })
       .catch((error: unknown) => {
         console.error(`classify failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -175,7 +207,8 @@ async function runPipeline() {
     `watching telemetry topic ${topics.telemetry}` +
       `${options.fromSec > 0 ? ` from ${options.fromSec}s ago` : ""}` +
       `, limits p<${DEFAULT_LIMITS.mawpBar} bar` +
-      `${classifier ? "" : ", SLM disabled"}${options.dryRun ? ", dry run" : ""}`,
+      `${classifier ? "" : ", SLM disabled"}${reporter ? "" : ", reports disabled"}` +
+      `${options.dryRun ? ", dry run" : ""}`,
   );
 
   await new Promise<void>((resolve) => {
@@ -185,7 +218,7 @@ async function runPipeline() {
       void queue.drain().then(() => {
         console.error(
           `frames=${stats.frames} events=${stats.events} classifications=${stats.classifications} ` +
-            `gaps=${stats.gaps} publishFailures=${queue.failures}`,
+            `reports=${stats.reports} gaps=${stats.gaps} publishFailures=${queue.failures}`,
         );
         client.close();
         resolve();
@@ -194,6 +227,15 @@ async function runPipeline() {
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
   });
+}
+
+/** Report on a fresh incident, on any escalation, or once the cooldown lapses. */
+function shouldReport(context: BoilerContext, urgency: number, now: number): boolean {
+  if (urgency < REPORT_URGENCY_THRESHOLD) return false;
+  const last = context.lastReport;
+  if (!last) return true;
+  if (urgency > last.urgency) return true;
+  return now - last.ts >= REPORT_COOLDOWN_SEC * 1000;
 }
 
 function contextFor(boilers: Map<string, BoilerContext>, boilerId: string): BoilerContext {

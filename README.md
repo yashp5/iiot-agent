@@ -32,6 +32,10 @@ simulator ──1 Hz frames, device key──► HCS telemetry topic
 4. **Human in the loop** — operators sign decisions with their own wallet onto the
    decisions topic. *(Not yet implemented.)*
 
+When a classification reaches urgency 3 or above, a Sonnet-written incident report
+(`src/pipeline/reporter.ts`) goes to the reports topic — body and SHA-256 together, carried
+on chain in HCS chunks rather than in an off-chain store.
+
 ## Setup
 
 ```bash
@@ -57,9 +61,25 @@ Start the pipeline first — it subscribes from "now" unless given `--from <seco
 | `npm run sim` | boiler simulator → telemetry topic (`--dry-run` for no chain) |
 | `npm run pipeline` | analysis worker (`--no-slm`, `--dry-run`, `--from`) |
 | `npm run setup:topics` | create the HCS topics |
+| `npm run web` | the dashboard at http://localhost:3100 |
 | `npm run build` / `npm test` | compile / vitest |
 
 Faults: `overpressure`, `o2_collapse`, `sensor_flatline`, `tube_rupture`, `low_water`.
+
+## Dashboard
+
+`web/` is a Next.js app deployable to Vercel. It reads the topics through the mirror node's
+REST API and shares the schemas and steam tables with the pipeline, so there is one
+definition of a telemetry frame. It holds no connection to the simulator or the worker —
+everything it renders is what the chain can prove.
+
+```bash
+npm run web     # http://localhost:3100, reads TOPIC_* from .env
+```
+
+Live sensor charts (one measure per chart — never twin axes), the temperature-vs-pressure
+combination plot with the saturation curve drawn through it, the detector event feed, and
+the incident reports with their on-chain hashes.
 
 ## Documentation
 
