@@ -203,7 +203,7 @@ an unplugged box, which is the half that produces the earliest warnings. But the
 system degrades to unlabelled anomaly scores with no state and no recommended action.
 
 **What it would take.** The `Classifier` interface already exists as the seam; a partition-
-tolerant build swaps `HaikuClassifier` for a quantized small model running on the edge box
+tolerant build swaps `HaikuClassifier` for a quantized small model [use slm, llama, mistral-7b moe, ollama] running on the edge box
 (3–8B class, llama.cpp or similar) with the same structured-output contract. The harder part is
 not serving the model, it is **calibration**: ANCHOR's authority schedule narrows as *model
 confidence* falls, which requires a confidence signal that means something. The current
